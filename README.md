@@ -18,11 +18,33 @@ browser — Safari on iOS, Chrome / Firefox on Android — and on desktop.
 | --- | --- | --- |
 | Move | Left-half joystick (drag anywhere on the left) | `WASD` / arrows |
 | Look | Drag on the right half | Right-mouse drag |
-| Attack | `ATTACK` button | `J` or `Space` |
+| Light attack (combo) | `ATTACK` button | `J` or `Space` |
+| Heavy / special attack | `SPECIAL` button | `L` |
+| Swap weapon | `WEAPON` button (shows current) | `U` |
 | Dodge roll | `DODGE` button | `K` or `Shift` |
 | Wave / Cheer | `WAVE` / `CHEER` buttons | `E` / `Q` |
 | Talk to an NPC | `TALK` button (appears nearby) | same |
 | Mute | `SOUND` toggle (top-right) | same |
+
+The HUD is fully **anchored** (safe-area-aware top-right cluster, big thumb-sized targets,
+no overlap with the drag-look region — look is routed through `_unhandled_input` so every
+button consumes its own tap), and every button has a press/scale + brightness-pop animation.
+
+### Arsenal
+Cycle weapons live with the **WEAPON** button (or `U`). Each has its own held KayKit models,
+a light combo + a heavy attack, and a distinct feel; attacks **aim-snap to the nearest enemy in
+range** so taps never whiff, and every landed hit throws sparks + a hit-flash + camera-shake.
+
+| Weapon | Type | Feel |
+| --- | --- | --- |
+| **Axe + Shield** | 1H melee | balanced 3-hit slice/chop combo; heavy lunging stab |
+| **Warhammer** | 2H melee | slow, huge damage, wide arc; heavy = a 360° spin that cleaves, big shake |
+| **War Spear** | 2H melee | long reach, narrow thrust; heavy wide slice |
+| **Longbow** | ranged | fast amber arrows; heavy = a heavier power shot |
+| **Arcane** | ranged (spell) | homing-aimed magic bolts; heavy = a charged blast |
+
+Heroes start with a fitting weapon (Knight → Axe, Rogue → Longbow, Mage → Arcane) but all five
+are available to everyone.
 
 ## Features
 
@@ -30,10 +52,12 @@ browser — Safari on iOS, Chrome / Firefox on Android — and on desktop.
   glowing descent portal. A lit `WorldEnvironment` (procedural sky, soft shadows, fog, ACES
   tonemapping) plus an inverted-hull **ink outline** on every hero & skeleton gives the committed
   KayKit chunky-adventure look. The environment darkens and the fog thickens as you descend.
-- **Heroes** — choose **Knight / Mage / Rogue** (KayKit). Third-person with a collision-aware
-  `SpringArm3D` follow camera; idle/walk/run locomotion, attack, dodge, hit & death reactions; the
-  hero always faces the way it moves. Knights/Rogues carry an axe + shield attached to the rig's
-  hand bones.
+- **Heroes & arsenal** — choose **Knight / Mage / Rogue** (KayKit). Third-person with a
+  collision-aware `SpringArm3D` follow camera; idle/walk/run locomotion, attack, dodge, hit & death
+  reactions; the hero always faces the way it moves. Five swappable weapons (axe+shield, warhammer,
+  spear, longbow, arcane) attach real KayKit models to the rig's hand bones, each with its own
+  light-combo + heavy attack, damage, reach, arc, cadence and screen-shake; ranged weapons fire a
+  real traveling projectile that sparks on impact.
 - **LLM NPCs** — a gruff **blacksmith (Doran)** and a nervous **quest-giver (Pip)** you can walk up
   to and *talk to*. They reply in character and remember the conversation (chat box + quick-reply
   chips + an animated thinking indicator), powered by the hosted `npc.myapping.com` brain.
@@ -43,9 +67,9 @@ browser — Safari on iOS, Chrome / Firefox on Android — and on desktop.
   have health bars, with death & respawn.
 - **PvP** — players in the same dungeon can also duel, with synced health and respawn.
 - **Multiplayer** — built on **Supabase Realtime broadcast** (client-authoritative friends-play):
-  name-tagged heroes, wave/emote, and synced positions / health / hits. Dungeon skeletons are
-  **host-elected** (the lowest peer id simulates them and broadcasts state; others render replicas;
-  damage is routed to the host) so the co-op world stays consistent.
+  name-tagged heroes, wave/emote, and synced positions / health / hits / equipped weapon. Dungeon
+  skeletons are **host-elected** (the lowest peer id simulates them and broadcasts state; others
+  render replicas; damage is routed to the host) so the co-op world stays consistent.
 - **Audio** — light town music, a darker dungeon ambience, and SFX for footsteps, sword swing /
   hit, taking a hit, skeleton death, loot, UI taps and NPC replies — all procedurally synthesized,
   unlocked by the tap-to-start gesture (so iOS works), with a mute toggle.
@@ -56,10 +80,12 @@ browser — Safari on iOS, Chrome / Firefox on Android — and on desktop.
 | --- | --- |
 | `main.gd` / `main.tscn` | Orchestrator: world + environment, HUD, tap-to-start + hero select, combat juice, multiplayer glue + host election, NPC chat |
 | `scripts/world.gd` | Builds the hub town + dungeon (geometry, props, torches, portals, spawn data) |
-| `scripts/player.gd` | Local hero controller (movement, follow camera, combat, health, camera-shake) |
-| `scripts/remote_player.gd` | Networked peer avatar (interpolated, name tag, health bar) |
+| `scripts/player.gd` | Local hero controller (movement, follow camera, arsenal + light/heavy attacks, aim-snap, health, camera-shake) |
+| `scripts/weapons.gd` | Arsenal data: per-weapon models, clips, damage, reach, arc, cadence, projectile |
+| `scripts/projectile.gd` | Traveling bow arrow / magic bolt that scans for hits and emits `struck` |
+| `scripts/remote_player.gd` | Networked peer avatar (interpolated, name tag, health bar, mirrored weapon + relayed attack clips) |
 | `scripts/skeleton.gd` | Enemy AI (patrol/chase/attack) with host-authoritative / replica modes |
-| `scripts/rig.gd` | KayKit rig helper: locomotion blend, one-shots, ink outline, weapon/shield attach, tint, hit-flash |
+| `scripts/rig.gd` | KayKit rig helper: locomotion blend, one-shots, ink outline, weapon swap (attach/detach), tint, hit-flash |
 | `scripts/npc.gd` | Talkable NPC (persona + capped conversation history) |
 | `scripts/health_bar.gd` | Camera-facing 3D health bar |
 | `scripts/audio.gd` | Music + pooled SFX + mute (autoload `Audio`) |
