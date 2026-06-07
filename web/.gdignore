@@ -1,0 +1,2 @@
+# Present so Godot's importer skips this folder (bridge.js is copied next to the
+# web export manually; it is not a Godot resource).
