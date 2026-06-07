@@ -1,36 +1,50 @@
-# Emberhold — build plan
+# Plan — mobile UI polish + weapon arsenal
 
-A complete **Godot 4.6.3** co-op + PvP dungeon raid, exported to **mobile web**
-(nothreads HTML5, Compatibility / WebGL2) so it runs in Safari (iOS) and Chrome (Android).
+Follow-up round on Emberhold. Four asks: (1) bigger, mobile-friendly NPC chat/typing UI,
+(2) bigger, less-congested top-right buttons, (3) better click/press animation on those buttons,
+(4) give the hero better weapons + more attack options.
 
 ## Goal
-- Real Godot project (NOT three.js/Phaser): tap-to-start, on-screen touch controls + WASD/mouse, fills the screen.
-- KayKit chunky-adventure art with a committed direction: lit `WorldEnvironment` (sky, soft shadows, light fog, ACES) + inverted-hull ink outline on heroes & skeletons.
-- Two areas in one shared world: a torchlit **HUB TOWN** and a **DUNGEON** reached through a descent portal.
-- Third-person hero (Knight / Mage / Rogue) with a `SpringArm3D` follow camera; idle/walk/run blended by speed, attack, hit & death reactions; character faces its movement.
-- Audio (unlocked by tap-to-start so iOS works): town music + dungeon ambience + SFX (footstep, sword swing, sword hit, take-hit, skeleton death, loot, UI tap, NPC blip) + mute toggle. Procedurally synthesized OGG, kept tiny.
-- LLM NPCs (blacksmith + nervous quest-giver) via `npc.myapping.com/chat` — in-character, remembers the conversation, chat box + animated thinking indicator.
-- PvE: skeletons (3 varied models + per-instance tint/scale) that patrol / chase / attack, with visible hit feedback (spark + flash + screen-shake), enemy + player health bars, death & respawn.
-- PvP: players in the same dungeon can duel — synced health + respawn.
-- Multiplayer over **Supabase Realtime broadcast**: shared world, name-tagged heroes, wave/emote, synced position/health/hits. Room code in the URL to share / open a second tab.
+- **NPC chat:** redesign as a large, touch-first sheet. Input field moved to the TOP of the panel
+  (right under the title) so the on-screen keyboard never hides it; big LineEdit + SEND, large chat
+  log font, quick-reply chips that wrap to a grid with big touch targets.
+- **Top-right HUD:** replace the lone cramped mute button with a clean, well-spaced cluster of big
+  pill buttons (SOUND toggle + SHARE) and a readable room-code pill; remove the old congested layout.
+- **Button press juice:** reusable press animation (scale punch with BACK/elastic ease + brightness
+  pop) bound to the button node; applied to the top-right cluster AND the combat buttons.
+- **Weapons + attacks:** a real arsenal the hero cycles through with a WEAPON-swap button, plus a
+  LIGHT (combo) and a HEAVY/SPECIAL attack button. Each weapon has its own KayKit model(s), attack
+  animation set, damage, range, arc, cooldown, and feel. Ranged weapons (bow, magic) fire a real
+  traveling projectile that sparks on hit.
 
 ## Files to touch
-- `project.godot`, `export_presets.cfg` — Compatibility renderer, nothreads Web preset, mobile head_include (viewport, Supabase CDN + `bridge.js`), `Net` + `Audio` autoloads.
-- `web/bridge.js` — Supabase Realtime broadcast bridge (URL + anon key filled), name + room helpers.
-- `net.gd` — Realtime client autoload.
-- `scripts/rig.gd` — KayKit character rig helper (locomotion blend, one-shots, ink outline, weapon/shield attach).
-- `scripts/player.gd`, `scripts/remote_player.gd`, `scripts/skeleton.gd`, `scripts/health_bar.gd`, `scripts/npc.gd`, `scripts/world.gd`, `scripts/audio.gd`.
-- `main.gd`, `main.tscn` — orchestrator: world, HUD (joystick / look / attack / dodge / emote / mute / chat / room code), tap-to-start, camera-shake juice, multiplayer glue + host election.
-- `tools/gen_audio.py`, `fetch_assets.sh` — regenerate audio / re-download CC0 models (binaries are git-ignored; the deployed preview bakes them in).
-- `README.md`, `.gitignore`.
-
-## Backend
-- No DB tables. Multiplayer uses Supabase **Realtime broadcast** (transient pub/sub, anon key, public channel — client-authoritative friends-play); NPCs use the hosted `npc.myapping.com` brain. Nothing is persisted, so no schema / RLS is required.
+- `main.gd` — rebuild chat UI (input-on-top, big), rebuild top-right HUD cluster, add press-juice
+  helper, add SPECIAL + WEAPON buttons, weapon-swap + heavy-attack wiring, projectile spawn/step,
+  shared `_damage_target` helper, virtual-keyboard nudge for the chat panel.
+- `scripts/weapons.gd` (new) — `Weapons` data: arsenal list + per-weapon def (models, light combo,
+  heavy clip, dmg, range, arc, cooldown, speed, ranged/spell flags, projectile color).
+- `scripts/player.gd` — equip/cycle weapon, attach right-hand + off-hand models, light/heavy attack
+  with combo index, emit ranged-fire signal, expose equipped weapon in `net_state`.
+- `scripts/projectile.gd` (new) — travels forward, detects skeletons/remote players, emits `struck`.
+- `scripts/rig.gd` — `play_clip(name, speed)` passthrough + swap-weapon attach/detach support.
+- `scripts/remote_player.gd` — reflect peer's equipped weapon model + relayed attack clip.
+- `scripts/skeleton.gd` — add to group `skeletons` so projectiles can hit them.
+- `fetch_assets.sh` — add the new weapon GLBs (axe_C, hammer_A, dagger_B, spear_A, bow_A, arrow_A).
+- `export_presets.cfg` — keep nothreads/Compatibility; no functional change expected.
+- `README.md` — document the arsenal + new controls.
 
 ## Verification approach
-- Headless export to web (nothreads) + the vetted Godot smoke verifier (engine boots, canvas, clean console, screenshots) and visual critique of frames.
-- Targeted checks: drive movement and confirm the hero faces travel direction (no `+Z` moonwalk); trigger an attack and assert spark/flash juice; multiplayer connect-path flag + headless packet injection (remote spawn, hit→hp drop, host-replica enemies) + a 2-client Node Realtime transport test; NPC endpoint contract + chat panel.
+- Headless export (nothreads/Compatibility) must succeed; `out/` has index.{html,js,wasm,pck}.
+- Clip-resolution check: every attack clip name referenced exists in the KayKit AnimationPlayer.
+- Playwright smoke (our verifier): engine boots, canvas, clean console, frames captured.
+- Targeted: drive WEAPON-swap then LIGHT + HEAVY attack on a spawned skeleton, assert hp drops via
+  the real damage path AND a spark/flash is emitted (JUICE FLOOR); confirm projectile travels for
+  ranged weapons. Drive facing (W away / S toward camera) to confirm no +Z moonwalk regression.
+- Multiplayer transport unaffected (2-client loopback still delivers); connect-path marker still set.
+- Screenshot-critique the chat sheet + top-right cluster for size/legibility on the portrait canvas.
 
 ## Out of scope
-- Persistent accounts / cloud saves / leaderboards (no persistence requested).
-- Server-authoritative anti-cheat netcode (multiplayer is client-authoritative friends-play).
+- No backend/Supabase schema changes (no new persistence). Realtime netcode unchanged except adding
+  the equipped-weapon field + attack-clip to existing state/act packets.
+- No new hero models; arsenal is shared across heroes (hero pick just sets the starting weapon).
+- Locomotion/AI tuning, new zones, loot economy — not requested.
