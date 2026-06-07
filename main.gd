@@ -1,13 +1,10 @@
 extends Node3D
 ## Emberhold orchestrator: world + environment, local player, HUD (joystick / look /
-## attack / dodge / emote / mute / room-share / NPC chat), tap-to-start + hero select,
-## combat juice (spark + flash + screen-shake), and Supabase-Realtime multiplayer with
-## host-elected dungeon skeletons. Mobile-web (nothreads, Compatibility/WebGL2).
+## arsenal attack+special+weapon-swap / dodge / emotes / sound / room-share / NPC chat),
+## tap-to-start + hero select, combat juice (spark + flash + screen-shake), traveling
+## projectiles, and Supabase-Realtime multiplayer with host-elected dungeon skeletons.
+## Anchored, touch-first HUD; mobile-web (nothreads, Compatibility/WebGL2).
 
-const MELEE_RANGE := 2.9
-const MELEE_DMG := 22.0
-const SPELL_RANGE := 8.5
-const SPELL_DMG := 18.0
 const ENEMY_DMG := 10.0
 const NPC_URL := "https://npc.myapping.com/chat"
 
@@ -53,6 +50,9 @@ var _room_label: Label
 var _toast: Label
 var _talk_btn: Button
 var _mute_btn: Button
+var _attack_btn: Button
+var _special_btn: Button
+var _weapon_btn: Button
 var _menu_layer: CanvasLayer
 var _hero_btns := {}
 
@@ -98,6 +98,7 @@ func _ready() -> void:
 		Net.connected.connect(_on_net_connected)
 
 	_build_hud()
+	get_viewport().size_changed.connect(_layout_chat)
 	_show_start_menu()
 
 
@@ -160,10 +161,13 @@ func _spawn_player() -> void:
 	add_child(player)
 	player.global_position = World.TOWN_SPAWN
 	player.set_active_camera()
-	player.melee_swing.connect(_on_player_swing)
+	player.melee_swing.connect(_on_player_melee)
+	player.ranged_fire.connect(_on_player_fire)
 	player.health_changed.connect(_on_player_health)
+	player.weapon_changed.connect(_on_weapon_changed)
 	player.died.connect(_on_player_died)
 	_on_player_health(player.hp, Player.MAX_HP)
+	_on_weapon_changed(player.weapon_index, str(player.weapon.get("label", "")))
 
 
 # ----------------------------- START / MENU -----------------------------
@@ -212,8 +216,9 @@ func _show_start_menu() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 14)
 	box.add_child(row)
-	for h in [["knight", "KNIGHT"], ["mage", "MAGE"], ["rogue", "ROGUE"]]:
-		var b := _styled_button(str(h[1]), Vector2(150, 64), Color(0.2, 0.18, 0.26))
+	for h in [["knight", "KNIGHT  (axe)"], ["mage", "MAGE  (arcane)"], ["rogue", "ROGUE  (bow)"]]:
+		var b := _styled_button(str(h[1]), Vector2(184, 66), Color(0.2, 0.18, 0.26))
+		b.add_theme_font_size_override("font_size", 18)
 		var key := str(h[0])
 		b.pressed.connect(func() -> void: _select_hero(key))
 		row.add_child(b)
@@ -226,7 +231,7 @@ func _show_start_menu() -> void:
 	box.add_child(enter)
 
 	var hint := Label.new()
-	hint.text = "Tap anywhere to begin  -  move: left joystick / WASD  -  attack: J  -  dodge: K"
+	hint.text = "Tap to begin  -  move: left stick / WASD  -  attack: J  -  special: L  -  swap weapon: U  -  dodge: K"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 15)
 	hint.add_theme_color_override("font_color", Color(0.7, 0.7, 0.75))
@@ -268,169 +273,245 @@ func _build_hud() -> void:
 	_hud = CanvasLayer.new()
 	_hud.layer = 10
 	add_child(_hud)
-	var vp := get_viewport().get_visible_rect().size
 
 	# joystick (dynamic, left half)
 	_joy_base = TextureRect.new()
-	_joy_base.texture = _circle_tex(150, Color(1, 1, 1, 0.16))
-	_joy_base.size = Vector2(150, 150)
+	_joy_base.texture = _circle_tex(160, Color(1, 1, 1, 0.16))
+	_joy_base.size = Vector2(160, 160)
 	_joy_base.visible = false
 	_joy_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_joy_base)
 	_joy_knob = TextureRect.new()
-	_joy_knob.texture = _circle_tex(70, Color(1, 1, 1, 0.34))
-	_joy_knob.size = Vector2(70, 70)
+	_joy_knob.texture = _circle_tex(74, Color(1, 1, 1, 0.34))
+	_joy_knob.size = Vector2(74, 74)
 	_joy_knob.visible = false
 	_joy_knob.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hud.add_child(_joy_knob)
 
-	# action buttons (right)
-	var atk := _styled_button("ATTACK", Vector2(132, 132), Color(0.7, 0.22, 0.18))
-	atk.position = vp - Vector2(160, 170)
-	atk.add_theme_font_size_override("font_size", 22)
-	atk.pressed.connect(func() -> void: _do_attack())
-	_hud.add_child(atk)
-
-	var dodge := _styled_button("DODGE", Vector2(104, 104), Color(0.2, 0.42, 0.7))
-	dodge.position = vp - Vector2(290, 150)
-	dodge.pressed.connect(func() -> void:
-		if player != null: player.do_dodge())
-	_hud.add_child(dodge)
-
-	var wave := _styled_button("WAVE", Vector2(96, 70), Color(0.35, 0.3, 0.5))
-	wave.position = vp - Vector2(160, 250)
-	wave.pressed.connect(func() -> void: _do_emote("wave"))
-	_hud.add_child(wave)
-
-	var cheer := _styled_button("CHEER", Vector2(96, 70), Color(0.35, 0.3, 0.5))
-	cheer.position = vp - Vector2(290, 270)
-	cheer.pressed.connect(func() -> void: _do_emote("cheer"))
-	_hud.add_child(cheer)
-
-	# health bar (top-left)
+	# --- health (top-left) ---
+	var hp_root := Control.new()
+	hp_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_pin(hp_root, 0.0, 0.0, Vector2(18, 18), Vector2(300, 40))
+	_hud.add_child(hp_root)
 	var hp_bg := ColorRect.new()
 	hp_bg.color = Color(0.05, 0.04, 0.06, 0.85)
-	hp_bg.position = Vector2(20, 20)
-	hp_bg.size = Vector2(300, 34)
-	_hud.add_child(hp_bg)
+	hp_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hp_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hp_root.add_child(hp_bg)
 	_hp_fill = ColorRect.new()
 	_hp_fill.color = Color(0.35, 0.85, 0.35)
-	_hp_fill.position = Vector2(24, 24)
-	_hp_fill.size = Vector2(292, 26)
-	_hud.add_child(_hp_fill)
+	_hp_fill.position = Vector2(4, 4)
+	_hp_fill.size = Vector2(292, 32)
+	_hp_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hp_root.add_child(_hp_fill)
 	_hp_label = Label.new()
 	_hp_label.text = "Hero"
-	_hp_label.position = Vector2(30, 24)
-	_hp_label.add_theme_font_size_override("font_size", 18)
-	_hud.add_child(_hp_label)
+	_hp_label.position = Vector2(10, 7)
+	_hp_label.add_theme_font_size_override("font_size", 20)
+	_hp_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hp_root.add_child(_hp_label)
 
-	# room code + share (top center)
+	# emotes (top-left, under health — out of the movement-thumb zone)
+	var wave := _styled_button("WAVE", Vector2(92, 46), Color(0.35, 0.3, 0.5))
+	wave.add_theme_font_size_override("font_size", 16)
+	wave.pressed.connect(func() -> void: _do_emote("wave"))
+	_pin(wave, 0.0, 0.0, Vector2(18, 66), Vector2(92, 46))
+	_hud.add_child(wave)
+	var cheer := _styled_button("CHEER", Vector2(92, 46), Color(0.35, 0.3, 0.5))
+	cheer.add_theme_font_size_override("font_size", 16)
+	cheer.pressed.connect(func() -> void: _do_emote("cheer"))
+	_pin(cheer, 0.0, 0.0, Vector2(118, 66), Vector2(92, 46))
+	_hud.add_child(cheer)
+
+	# --- room code pill (top-center) ---
+	var room_root := Panel.new()
+	room_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var rsb := StyleBoxFlat.new()
+	rsb.bg_color = Color(0.06, 0.05, 0.09, 0.8)
+	rsb.set_corner_radius_all(10)
+	room_root.add_theme_stylebox_override("panel", rsb)
+	_pin(room_root, 0.5, 0.0, Vector2(0, 18), Vector2(250, 42))
+	_hud.add_child(room_root)
 	_room_label = Label.new()
 	_room_label.text = "Connecting..."
-	_room_label.position = Vector2(vp.x * 0.5 - 120, 22)
-	_room_label.size = Vector2(240, 28)
+	_room_label.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_room_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_room_label.add_theme_font_size_override("font_size", 18)
+	_room_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_room_label.add_theme_font_size_override("font_size", 19)
 	_room_label.add_theme_color_override("font_color", Color(1, 0.85, 0.5))
-	_hud.add_child(_room_label)
-	var share := _styled_button("SHARE LINK", Vector2(150, 36), Color(0.2, 0.4, 0.3))
-	share.position = Vector2(vp.x * 0.5 - 75, 54)
-	share.add_theme_font_size_override("font_size", 16)
-	share.pressed.connect(_share_link)
-	_hud.add_child(share)
+	_room_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	room_root.add_child(_room_label)
 
-	# mute (top right)
-	_mute_btn = _styled_button("SOUND ON", Vector2(120, 40), Color(0.25, 0.25, 0.32))
-	_mute_btn.position = Vector2(vp.x - 140, 20)
-	_mute_btn.add_theme_font_size_override("font_size", 15)
+	# --- top-right cluster (sound + share), safe-area inset honored ---
+	var tr := VBoxContainer.new()
+	tr.add_theme_constant_override("separation", 12)
+	tr.mouse_filter = Control.MOUSE_FILTER_PASS
+	_pin(tr, 1.0, 0.0, Vector2(16, 18), Vector2(188, 130))
+	_hud.add_child(tr)
+	_mute_btn = _styled_button("SOUND: ON", Vector2(188, 56), Color(0.24, 0.26, 0.34))
+	_mute_btn.add_theme_font_size_override("font_size", 19)
 	_mute_btn.pressed.connect(_toggle_mute)
-	_hud.add_child(_mute_btn)
+	tr.add_child(_mute_btn)
+	var share := _styled_button("SHARE LINK", Vector2(188, 56), Color(0.18, 0.46, 0.32))
+	share.add_theme_font_size_override("font_size", 19)
+	share.pressed.connect(_share_link)
+	tr.add_child(share)
 
-	# talk button (hidden until near an NPC)
-	_talk_btn = _styled_button("TALK", Vector2(200, 56), Color(0.3, 0.5, 0.7))
-	_talk_btn.position = Vector2(vp.x * 0.5 - 100, vp.y - 150)
+	# --- combat cluster (bottom-right) ---
+	_attack_btn = _styled_button("ATTACK", Vector2(132, 132), Color(0.74, 0.22, 0.18))
+	_attack_btn.add_theme_font_size_override("font_size", 24)
+	_attack_btn.pressed.connect(func() -> void: _do_attack(false))
+	_pin(_attack_btn, 1.0, 1.0, Vector2(24, 24), Vector2(132, 132))
+	_hud.add_child(_attack_btn)
+
+	var dodge := _styled_button("DODGE", Vector2(106, 106), Color(0.2, 0.42, 0.7))
+	dodge.add_theme_font_size_override("font_size", 19)
+	dodge.pressed.connect(func() -> void:
+		if player != null: player.do_dodge())
+	_pin(dodge, 1.0, 1.0, Vector2(170, 34), Vector2(106, 106))
+	_hud.add_child(dodge)
+
+	_special_btn = _styled_button("SPECIAL", Vector2(118, 118), Color(0.82, 0.52, 0.16))
+	_special_btn.add_theme_font_size_override("font_size", 20)
+	_special_btn.pressed.connect(func() -> void: _do_attack(true))
+	_pin(_special_btn, 1.0, 1.0, Vector2(30, 174), Vector2(118, 118))
+	_hud.add_child(_special_btn)
+
+	_weapon_btn = _styled_button("WEAPON", Vector2(152, 60), Color(0.3, 0.28, 0.42))
+	_weapon_btn.add_theme_font_size_override("font_size", 18)
+	_weapon_btn.pressed.connect(func() -> void:
+		if player != null: player.cycle_weapon())
+	_pin(_weapon_btn, 1.0, 1.0, Vector2(170, 152), Vector2(152, 60))
+	_hud.add_child(_weapon_btn)
+
+	# --- talk (bottom-center, hidden until near an NPC) ---
+	_talk_btn = _styled_button("TALK", Vector2(244, 64), Color(0.28, 0.5, 0.72))
+	_talk_btn.add_theme_font_size_override("font_size", 20)
 	_talk_btn.visible = false
 	_talk_btn.pressed.connect(_talk_to_nearest)
+	_pin(_talk_btn, 0.5, 1.0, Vector2(0, 172), Vector2(244, 64))
 	_hud.add_child(_talk_btn)
 
 	# toast
 	_toast = Label.new()
-	_toast.position = Vector2(vp.x * 0.5 - 160, 96)
-	_toast.size = Vector2(320, 28)
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_toast.add_theme_font_size_override("font_size", 16)
+	_toast.add_theme_font_size_override("font_size", 18)
 	_toast.add_theme_color_override("font_color", Color(0.7, 1.0, 0.8))
+	_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_toast.modulate.a = 0.0
+	_pin(_toast, 0.5, 0.0, Vector2(0, 70), Vector2(380, 30))
 	_hud.add_child(_toast)
 
-	_build_chat(vp)
+	_build_chat()
 	_hud.visible = false
 
 
-func _build_chat(vp: Vector2) -> void:
+func _build_chat() -> void:
 	_chat_panel = Panel.new()
-	_chat_panel.size = Vector2(min(vp.x - 40, 620), 300)
-	_chat_panel.position = Vector2((vp.x - _chat_panel.size.x) * 0.5, vp.y - 320)
+	_chat_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	var psb := StyleBoxFlat.new()
-	psb.bg_color = Color(0.06, 0.05, 0.09, 0.95)
-	psb.set_corner_radius_all(14)
+	psb.bg_color = Color(0.06, 0.05, 0.09, 0.96)
+	psb.set_corner_radius_all(16)
 	psb.set_border_width_all(2)
 	psb.border_color = Color(1.0, 0.7, 0.3, 0.7)
 	_chat_panel.add_theme_stylebox_override("panel", psb)
 	_chat_panel.visible = false
 	_hud.add_child(_chat_panel)
 
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for m in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
+		margin.add_theme_constant_override(m, 18)
+	_chat_panel.add_child(margin)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	margin.add_child(vb)
+
+	# title row
+	var trow := HBoxContainer.new()
+	trow.add_theme_constant_override("separation", 8)
+	vb.add_child(trow)
 	_chat_title = Label.new()
 	_chat_title.text = "NPC"
-	_chat_title.position = Vector2(16, 10)
-	_chat_title.add_theme_font_size_override("font_size", 20)
+	_chat_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_chat_title.add_theme_font_size_override("font_size", 26)
 	_chat_title.add_theme_color_override("font_color", Color(1.0, 0.78, 0.4))
-	_chat_panel.add_child(_chat_title)
-
-	var close := _styled_button("CLOSE", Vector2(90, 32), Color(0.4, 0.2, 0.2))
-	close.position = Vector2(_chat_panel.size.x - 104, 8)
-	close.add_theme_font_size_override("font_size", 14)
+	trow.add_child(_chat_title)
+	var close := _styled_button("CLOSE", Vector2(110, 48), Color(0.42, 0.2, 0.2))
+	close.add_theme_font_size_override("font_size", 17)
 	close.pressed.connect(_close_chat)
-	_chat_panel.add_child(close)
+	trow.add_child(close)
 
+	# input row (TOP, under title — keeps it above the on-screen keyboard)
+	var irow := HBoxContainer.new()
+	irow.add_theme_constant_override("separation", 8)
+	vb.add_child(irow)
+	_chat_input = LineEdit.new()
+	_chat_input.placeholder_text = "Type a message..."
+	_chat_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_chat_input.custom_minimum_size = Vector2(0, 58)
+	_chat_input.add_theme_font_size_override("font_size", 22)
+	var isb := StyleBoxFlat.new()
+	isb.bg_color = Color(0.12, 0.11, 0.16)
+	isb.set_corner_radius_all(10)
+	isb.content_margin_left = 14
+	isb.content_margin_right = 14
+	isb.content_margin_top = 10
+	isb.content_margin_bottom = 10
+	_chat_input.add_theme_stylebox_override("normal", isb)
+	var ifb := isb.duplicate() as StyleBoxFlat
+	ifb.border_color = Color(1.0, 0.7, 0.3, 0.9)
+	ifb.set_border_width_all(2)
+	_chat_input.add_theme_stylebox_override("focus", ifb)
+	_chat_input.text_submitted.connect(func(t: String) -> void: _send_chat(t))
+	irow.add_child(_chat_input)
+	_chat_send = _styled_button("SEND", Vector2(112, 58), Color(0.24, 0.5, 0.32))
+	_chat_send.add_theme_font_size_override("font_size", 20)
+	_chat_send.pressed.connect(func() -> void: _send_chat(_chat_input.text))
+	irow.add_child(_chat_send)
+
+	# thinking indicator
+	_chat_think = Label.new()
+	_chat_think.add_theme_font_size_override("font_size", 18)
+	_chat_think.add_theme_color_override("font_color", Color(0.75, 0.75, 0.85))
+	_chat_think.visible = false
+	vb.add_child(_chat_think)
+
+	# reply log (roomy, scrolls)
 	_chat_log = RichTextLabel.new()
-	_chat_log.position = Vector2(16, 46)
-	_chat_log.size = Vector2(_chat_panel.size.x - 32, 150)
 	_chat_log.scroll_following = true
 	_chat_log.bbcode_enabled = true
-	_chat_log.add_theme_font_size_override("normal_font_size", 16)
-	_chat_panel.add_child(_chat_log)
+	_chat_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_chat_log.custom_minimum_size = Vector2(0, 170)
+	_chat_log.add_theme_font_size_override("normal_font_size", 21)
+	_chat_log.add_theme_font_size_override("bold_font_size", 21)
+	vb.add_child(_chat_log)
 
-	_chat_think = Label.new()
-	_chat_think.position = Vector2(16, 200)
-	_chat_think.add_theme_font_size_override("font_size", 16)
-	_chat_think.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
-	_chat_think.visible = false
-	_chat_panel.add_child(_chat_think)
-
-	var chiprow := HBoxContainer.new()
-	chiprow.position = Vector2(16, 222)
-	chiprow.add_theme_constant_override("separation", 8)
-	_chat_panel.add_child(chiprow)
+	# quick-reply chips (wrap to a grid, big thumb targets)
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 8)
+	chips.add_theme_constant_override("v_separation", 8)
+	vb.add_child(chips)
 	for q in ["Hello", "What's down there?", "Any advice?", "Got work for me?"]:
-		var c := _styled_button(str(q), Vector2(0, 34), Color(0.22, 0.3, 0.4))
-		c.add_theme_font_size_override("font_size", 14)
+		var c := _styled_button(str(q), Vector2(0, 48), Color(0.22, 0.3, 0.42))
+		c.add_theme_font_size_override("font_size", 17)
 		var msg := str(q)
 		c.pressed.connect(func() -> void: _send_chat(msg))
-		chiprow.add_child(c)
+		chips.add_child(c)
 		_chips.append(c)
 
-	_chat_input = LineEdit.new()
-	_chat_input.position = Vector2(16, 262)
-	_chat_input.size = Vector2(_chat_panel.size.x - 130, 32)
-	_chat_input.placeholder_text = "Type a message..."
-	_chat_input.text_submitted.connect(func(t: String) -> void: _send_chat(t))
-	_chat_panel.add_child(_chat_input)
-	_chat_send = _styled_button("SEND", Vector2(90, 32), Color(0.25, 0.45, 0.3))
-	_chat_send.position = Vector2(_chat_panel.size.x - 106, 262)
-	_chat_send.add_theme_font_size_override("font_size", 14)
-	_chat_send.pressed.connect(func() -> void: _send_chat(_chat_input.text))
-	_chat_panel.add_child(_chat_send)
+	_layout_chat()
+
+
+func _layout_chat() -> void:
+	if _chat_panel == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var w := minf(vp.x - 24.0, 700.0)
+	var h := minf(vp.y * 0.66, 560.0)
+	_pin(_chat_panel, 0.5, 0.0, Vector2(0, maxf(20.0, vp.y * 0.06)), Vector2(w, h))
 
 
 # ----------------------------- NPCs -----------------------------
@@ -463,6 +544,7 @@ func _nearest_npc() -> NPC:
 func _open_chat(npc: NPC) -> void:
 	_active_npc = npc
 	_chat_open = true
+	_layout_chat()
 	_chat_panel.visible = true
 	_chat_title.text = npc.npc_name
 	_chat_log.clear()
@@ -471,6 +553,7 @@ func _open_chat(npc: NPC) -> void:
 		_chat_log.append_text("[b]%s:[/b] %s\n" % [who, str(m["content"])])
 	if npc.history.is_empty():
 		_chat_log.append_text("[i]Walk up and say hello.[/i]\n")
+	_chat_input.grab_focus()
 	npc.emote()
 	Audio.play_sfx("ui")
 
@@ -543,10 +626,20 @@ func _set_chat_enabled(on: bool) -> void:
 
 
 # ----------------------------- COMBAT -----------------------------
-func _do_attack() -> void:
-	if player != null and not _chat_open:
-		player.do_attack()
-		_net_act("attack")
+func _do_attack(heavy: bool) -> void:
+	if player == null or _chat_open or player.dead:
+		return
+	var rng := float(player.weapon.get("range", 3.0))
+	var ranged := bool(player.weapon.get("ranged", false))
+	var seek := rng if ranged else rng * 1.4
+	var tgt: Variant = _nearest_enemy_pos(seek)
+	var clip := ""
+	if heavy:
+		clip = player.do_heavy_attack(tgt)
+	else:
+		clip = player.do_light_attack(tgt)
+	if clip != "":
+		_net_act_attack(clip, heavy)
 
 
 func _do_emote(which: String) -> void:
@@ -555,47 +648,104 @@ func _do_emote(which: String) -> void:
 		_net_act(which)
 
 
-func _on_player_swing(origin: Vector3, fwd: Vector3, is_spell: bool) -> void:
-	var rng := SPELL_RANGE if is_spell else MELEE_RANGE
-	var dmg := SPELL_DMG if is_spell else MELEE_DMG
-	var hit_any := false
+func _nearest_enemy_pos(rng: float) -> Variant:
+	if player == null:
+		return null
+	var p := player.global_position
+	var best: Variant = null
+	var bd := rng
+	for s in _all_skeletons():
+		var sk := s as Skeleton
+		if sk == null or sk.dead:
+			continue
+		var d := p.distance_to(sk.global_position)
+		if d < bd:
+			bd = d
+			best = sk.global_position + Vector3(0, 1.0, 0)
+	for id in _remotes.keys():
+		var rp := _remotes[id] as RemotePlayer
+		if rp == null or not rp.is_targetable():
+			continue
+		var d := p.distance_to(rp.global_position)
+		if d < bd:
+			bd = d
+			best = rp.global_position + Vector3(0, 1.0, 0)
+	return best
 
-	# skeletons (host + replicas)
+
+func _all_skeletons() -> Array:
 	var skels: Array = []
 	skels.append_array(_host_skeletons)
 	for k in _replicas.keys():
 		skels.append(_replicas[k])
-	for s in skels:
+	return skels
+
+
+func _on_player_melee(origin: Vector3, fwd: Vector3, dmg: float, rng: float, arc: float, heavy: bool) -> void:
+	var hit_any := false
+	for s in _all_skeletons():
 		var sk := s as Skeleton
 		if sk == null or sk.dead:
 			continue
 		var to: Vector3 = sk.global_position + Vector3(0, 1.0, 0) - origin
-		if to.length() <= rng and fwd.dot(to.normalized()) > 0.25:
-			hit_any = true
-			_spark(sk.global_position + Vector3(0, 1.1, 0), Color(1.0, 0.85, 0.3))
-			sk.rig.flash(Color(1, 0.4, 0.3))
-			if _am_host:
-				sk.apply_damage(dmg)
-			else:
-				sk.local_hit_flash()
-				Net.send({"t": "ehit", "id": sk.eid, "dmg": dmg})
-
-	# PvP: remote players
+		if to.length() <= rng and fwd.dot(to.normalized()) >= arc:
+			if _apply_hit(sk, dmg, sk.global_position + Vector3(0, 1.1, 0), heavy):
+				hit_any = true
 	for id in _remotes.keys():
 		var rp := _remotes[id] as RemotePlayer
 		if rp == null or not rp.is_targetable():
 			continue
 		var to2: Vector3 = rp.global_position + Vector3(0, 1.0, 0) - origin
-		if to2.length() <= rng and fwd.dot(to2.normalized()) > 0.25:
-			hit_any = true
-			_spark(rp.global_position + Vector3(0, 1.1, 0), Color(1.0, 0.4, 0.4))
-			rp.rig.flash(Color(1, 0.5, 0.4))
-			Net.send({"t": "phit", "target": str(id), "dmg": dmg})
-
+		if to2.length() <= rng and fwd.dot(to2.normalized()) >= arc:
+			if _apply_hit(rp, dmg, rp.global_position + Vector3(0, 1.1, 0), heavy):
+				hit_any = true
 	if hit_any:
-		Audio.play_sfx("hit")
-		if player != null:
-			player.add_shake(0.18)
+		_land_feedback(heavy)
+
+
+func _on_player_fire(origin: Vector3, dir: Vector3, dmg: float, rng: float, color: Color, speed: float, spell: bool, heavy: bool) -> void:
+	var pr := Projectile.new()
+	add_child(pr)
+	pr.setup(origin, dir, speed, rng, color, spell, player)
+	pr.struck.connect(func(pos: Vector3, node: Node) -> void:
+		if _apply_hit(node, dmg, pos, heavy):
+			_land_feedback(heavy))
+	Audio.play_sfx("swing", -3.0)
+
+
+func _apply_hit(node: Node, dmg: float, hit_pos: Vector3, heavy: bool) -> bool:
+	if node == null:
+		return false
+	if node is Skeleton:
+		var sk := node as Skeleton
+		if sk.dead:
+			return false
+		_spark(hit_pos, Color(1.0, 0.85, 0.3), heavy)
+		sk.rig.flash(Color(1, 0.4, 0.3))
+		if _am_host:
+			sk.apply_damage(dmg)
+		else:
+			sk.local_hit_flash()
+			Net.send({"t": "ehit", "id": sk.eid, "dmg": dmg})
+		return true
+	if node is RemotePlayer:
+		var rp := node as RemotePlayer
+		if not rp.is_targetable():
+			return false
+		_spark(hit_pos, Color(1.0, 0.4, 0.4), heavy)
+		rp.rig.flash(Color(1, 0.5, 0.4))
+		if rp.peer_id != "":
+			Net.send({"t": "phit", "target": rp.peer_id, "dmg": dmg})
+		return true
+	return false
+
+
+func _land_feedback(heavy: bool) -> void:
+	Audio.play_sfx("hit")
+	if player != null:
+		var sh := float(player.weapon.get("heavy_shake", 0.36)) if heavy else float(player.weapon.get("shake", 0.18))
+		player.add_shake(sh)
+	_pulse_button(_special_btn if heavy else _attack_btn)
 
 
 func _on_skeleton_swing(origin: Vector3) -> void:
@@ -609,21 +759,21 @@ func _on_skeleton_swing(origin: Vector3) -> void:
 
 
 # ----------------------------- JUICE -----------------------------
-func _spark(pos: Vector3, color: Color) -> void:
+func _spark(pos: Vector3, color: Color, heavy := false) -> void:
 	var p := CPUParticles3D.new()
 	p.position = pos
 	p.emitting = true
 	p.one_shot = true
-	p.amount = 18
-	p.lifetime = 0.5
+	p.amount = 34 if heavy else 18
+	p.lifetime = 0.55
 	p.explosiveness = 0.9
 	p.direction = Vector3(0, 1, 0)
 	p.spread = 90.0
 	p.initial_velocity_min = 2.5
-	p.initial_velocity_max = 6.0
+	p.initial_velocity_max = 7.5 if heavy else 6.0
 	p.gravity = Vector3(0, -9, 0)
 	p.scale_amount_min = 0.12
-	p.scale_amount_max = 0.26
+	p.scale_amount_max = 0.34 if heavy else 0.26
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = color
@@ -647,9 +797,17 @@ func _flash_screen(c: Color) -> void:
 	tw.tween_callback(r.queue_free)
 
 
+func _pulse_button(b: Button) -> void:
+	if b == null:
+		return
+	b.pivot_offset = b.size * 0.5
+	var t := b.create_tween()
+	t.tween_property(b, "modulate", Color(1.6, 1.4, 1.2), 0.06)
+	t.tween_property(b, "modulate", Color(1, 1, 1), 0.18)
+
+
 # ----------------------------- PROCESS -----------------------------
 func _process(delta: float) -> void:
-	# torch flicker handled inside World; env blend toward area
 	var target := 1.0 if area == "dungeon" else 0.0
 	_env_blend = move_toward(_env_blend, target, delta * 1.2)
 	_apply_env(_env_blend)
@@ -658,7 +816,6 @@ func _process(delta: float) -> void:
 		return
 	_hud.visible = true
 
-	# feed movement
 	if player != null:
 		if _chat_open:
 			player.move_input = Vector2.ZERO
@@ -670,8 +827,6 @@ func _process(delta: float) -> void:
 	_animate_thinking(delta)
 	_update_toast(delta)
 
-	# host election + AI run even when offline so solo PvE works; only broadcast
-	# state/enemies when actually connected to a room.
 	_host_t -= delta
 	if _host_t <= 0.0:
 		_host_t = 0.5
@@ -732,7 +887,7 @@ func _animate_thinking(delta: float) -> void:
 	if _think_t <= 0.0:
 		_think_t = 0.4
 		_think_n = (_think_n + 1) % 4
-		_chat_think.text = _active_npc.npc_name + " is thinking" + ".".repeat(_think_n) if _active_npc != null else "..."
+		_chat_think.text = (_active_npc.npc_name + " is thinking" + ".".repeat(_think_n)) if _active_npc != null else "..."
 
 
 func _update_toast(delta: float) -> void:
@@ -770,7 +925,12 @@ func _broadcast_enemies() -> void:
 
 func _net_act(a: String) -> void:
 	if has_node("/root/Net") and Net.online:
-		Net.send({"t": "act", "a": a})
+		Net.send({"t": "act", "a": a, "clip": ""})
+
+
+func _net_act_attack(clip: String, heavy: bool) -> void:
+	if has_node("/root/Net") and Net.online:
+		Net.send({"t": "act", "a": "atk", "clip": clip, "hv": 1 if heavy else 0})
 
 
 func _on_net_message(d: Dictionary) -> void:
@@ -783,7 +943,7 @@ func _on_net_message(d: Dictionary) -> void:
 			_apply_peer_state(from, d)
 		"act":
 			if _remotes.has(from):
-				(_remotes[from] as RemotePlayer).play_act(str(d.get("a", "")))
+				(_remotes[from] as RemotePlayer).play_act(str(d.get("a", "")), str(d.get("clip", "")))
 		"phit":
 			if str(d.get("target", "")) == Net.local_id and player != null:
 				player.apply_damage(float(d.get("dmg", 0.0)))
@@ -808,10 +968,11 @@ func _apply_peer_state(from: String, d: Dictionary) -> void:
 	else:
 		rp = RemotePlayer.new()
 		rp.configure(str(d.get("hero", "res://models/kk_Rogue.glb")), str(d.get("name", "Hero")))
+		rp.peer_id = from
 		add_child(rp)
 		_remotes[from] = rp
 	var pos := Vector3(float(d.get("x", 0)), float(d.get("y", 0)), float(d.get("z", 0)))
-	rp.apply_state(pos, float(d.get("ry", 0)), float(d.get("hp", 100.0)), bool(d.get("dead", false)))
+	rp.apply_state(pos, float(d.get("ry", 0)), float(d.get("hp", 100.0)), bool(d.get("dead", false)), int(d.get("wp", 0)))
 
 
 func _apply_enemy_list(list: Variant) -> void:
@@ -850,12 +1011,10 @@ func _update_host() -> void:
 
 func _become_host() -> void:
 	_am_host = true
-	# clear any replicas; we now own the enemies
 	for k in _replicas.keys():
 		(_replicas[k] as Skeleton).queue_free()
 	_replicas.clear()
 	_replica_seen.clear()
-	# idempotent: drop any host skeletons we already own before respawning
 	for s in _host_skeletons:
 		(s as Skeleton).queue_free()
 	_host_skeletons.clear()
@@ -927,6 +1086,12 @@ func _on_player_health(hp: float, maxhp: float) -> void:
 		_hp_label.text = "%s  %d" % [player.hero_name, int(hp)]
 
 
+func _on_weapon_changed(_index: int, label: String) -> void:
+	if _weapon_btn != null:
+		_weapon_btn.text = label
+		_pulse_button(_weapon_btn)
+
+
 func _on_player_died() -> void:
 	_show_toast("You fell - respawning...")
 	get_tree().create_timer(3.0).timeout.connect(func() -> void:
@@ -958,7 +1123,7 @@ func _share_link() -> void:
 func _toggle_mute() -> void:
 	var m := not Audio.muted
 	Audio.set_muted(m)
-	_mute_btn.text = "SOUND OFF" if m else "SOUND ON"
+	_mute_btn.text = "SOUND: OFF" if m else "SOUND: ON"
 
 
 # ----------------------------- INPUT -----------------------------
@@ -970,19 +1135,27 @@ func _input(event: InputEvent) -> void:
 		return
 	if _chat_open:
 		return
-
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_J, KEY_SPACE:
-				_do_attack()
+				_do_attack(false)
+			KEY_L:
+				_do_attack(true)
+			KEY_U:
+				if player != null: player.cycle_weapon()
 			KEY_K, KEY_SHIFT:
 				if player != null: player.do_dodge()
 			KEY_E:
 				_do_emote("wave")
 			KEY_Q:
 				_do_emote("cheer")
-		return
 
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Touch joystick + drag-look live HERE (not _input) so HUD buttons consume their
+	# own taps first — the look region excludes every button rect automatically.
+	if not started or _chat_open:
+		return
 	var half := get_viewport().get_visible_rect().size.x * 0.5
 	if event is InputEventScreenTouch:
 		if event.pressed:
@@ -1028,19 +1201,48 @@ func _keyboard_vector() -> Vector2:
 
 
 # ----------------------------- UI helpers -----------------------------
+func _pin(c: Control, ha: float, va: float, off: Vector2, sz: Vector2) -> void:
+	# Anchor a control to a corner/edge (ha/va in {0, 0.5, 1}) so the layout is
+	# resize-robust on a phone that rotates or has the URL bar collapse.
+	c.anchor_left = ha
+	c.anchor_right = ha
+	c.anchor_top = va
+	c.anchor_bottom = va
+	if ha == 0.0:
+		c.offset_left = off.x
+		c.offset_right = off.x + sz.x
+	elif ha == 1.0:
+		c.offset_left = -(off.x + sz.x)
+		c.offset_right = -off.x
+	else:
+		c.offset_left = -sz.x * 0.5 + off.x
+		c.offset_right = sz.x * 0.5 + off.x
+	if va == 0.0:
+		c.offset_top = off.y
+		c.offset_bottom = off.y + sz.y
+	elif va == 1.0:
+		c.offset_top = -(off.y + sz.y)
+		c.offset_bottom = -off.y
+	else:
+		c.offset_top = -sz.y * 0.5 + off.y
+		c.offset_bottom = sz.y * 0.5 + off.y
+
+
 func _styled_button(text: String, size: Vector2, col: Color) -> Button:
 	var b := Button.new()
 	b.text = text
 	if size.x > 0:
 		b.custom_minimum_size = size
 		b.size = size
+	elif size.y > 0:
+		b.custom_minimum_size = Vector2(0, size.y)
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = col
 	sb.set_corner_radius_all(12)
-	sb.content_margin_left = 12
-	sb.content_margin_right = 12
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
+	sb.content_margin_left = 14
+	sb.content_margin_right = 14
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
 	b.add_theme_stylebox_override("normal", sb)
 	var hb := sb.duplicate() as StyleBoxFlat
 	hb.bg_color = col.lightened(0.15)
@@ -1052,7 +1254,22 @@ func _styled_button(text: String, size: Vector2, col: Color) -> Button:
 	db.bg_color = col.darkened(0.4)
 	b.add_theme_stylebox_override("disabled", db)
 	b.add_theme_color_override("font_color", Color(1, 1, 1))
+	_juice_button(b)
 	return b
+
+
+func _juice_button(b: Button) -> void:
+	# Press = quick scale-down + brightness pop; release = springy overshoot back.
+	b.button_down.connect(func() -> void:
+		b.pivot_offset = b.size * 0.5
+		var t := b.create_tween().set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		t.tween_property(b, "scale", Vector2(0.9, 0.9), 0.07)
+		t.parallel().tween_property(b, "modulate", Color(1.3, 1.3, 1.3), 0.07))
+	b.button_up.connect(func() -> void:
+		b.pivot_offset = b.size * 0.5
+		var t := b.create_tween().set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		t.tween_property(b, "scale", Vector2.ONE, 0.24)
+		t.parallel().tween_property(b, "modulate", Color(1, 1, 1), 0.2))
 
 
 func _circle_tex(d: int, col: Color) -> ImageTexture:

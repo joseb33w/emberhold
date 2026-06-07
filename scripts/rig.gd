@@ -1,7 +1,7 @@
 class_name CharacterRig
 extends Node3D
 ## Wraps a KayKit Rig_Medium .glb: drives its AnimationPlayer (locomotion blend +
-## one-shots), applies an inverted-hull ink outline, and attaches a weapon/shield.
+## one-shots), applies an inverted-hull ink outline, and attaches held weapons/shields.
 ## KayKit characters model-face +Z, which matches `atan2(dir.x, dir.z)` for facing
 ## (NO +PI offset). Feet sit at y=0.
 
@@ -17,13 +17,14 @@ var _busy := false
 var _dead := false
 var _cur_loco := ""
 var _oneshot := ""
+var _attachments: Array[Node] = []
 
 signal oneshot_finished(name: String)
 
 static var _outline_mat: ShaderMaterial
 
 
-func setup(model_path: String, outline_color: Color = Color(0.05, 0.04, 0.06), weapon_path := "", shield_path := "") -> void:
+func setup(model_path: String, outline_color: Color = Color(0.05, 0.04, 0.06)) -> void:
 	var packed: PackedScene = load(model_path)
 	model = packed.instantiate()
 	add_child(model)
@@ -36,10 +37,24 @@ func setup(model_path: String, outline_color: Color = Color(0.05, 0.04, 0.06), w
 		anim.animation_finished.connect(_on_anim_finished)
 		_play_loco(IDLE)
 	_apply_outline(outline_color)
-	if weapon_path != "" and skeleton != null:
-		_attach(weapon_path, "handslot_r")
-	if shield_path != "" and skeleton != null:
-		_attach(shield_path, "handslot_l")
+
+
+func has_clip(clip: String) -> bool:
+	return anim != null and anim.has_animation(clip)
+
+
+func attach_weapon(rhand_path: String, lhand_path: String) -> void:
+	# Swap the held models: drop whatever we attached last, then attach the new set.
+	for n in _attachments:
+		if is_instance_valid(n):
+			n.queue_free()
+	_attachments.clear()
+	if skeleton == null:
+		return
+	if rhand_path != "":
+		_attach(rhand_path, "handslot_r")
+	if lhand_path != "":
+		_attach(lhand_path, "handslot_l")
 
 
 func update_locomotion(speed: float) -> void:
@@ -153,8 +168,12 @@ func _attach(path: String, bone: String) -> void:
 	var ba := BoneAttachment3D.new()
 	ba.bone_name = bone
 	skeleton.add_child(ba)
-	var w: Node3D = (load(path) as PackedScene).instantiate()
+	var packed := load(path) as PackedScene
+	if packed == null:
+		return
+	var w: Node3D = packed.instantiate()
 	ba.add_child(w)
+	_attachments.append(ba)
 
 
 func _apply_outline(col: Color) -> void:

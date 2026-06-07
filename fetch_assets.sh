@@ -21,7 +21,8 @@ props=(
   kk_hex/building_tower_B_blue kk_dungeon/banner_patternA_red kk_dungeon/banner_blue
   kk_rpgtools/anvil kk_rpgtools/lantern kk_food/crate kk_resource/Fuel_A_Barrel
   kk_resource/Gold_Bars_Stack_Large kk_nature/Bush_1_A_Color1 kk_nature/Bush_2_B_Color1
-  kk_weapons/shield_B kk_weapons/axe_A
+  kk_weapons/shield_B kk_weapons/axe_A kk_weapons/axe_C kk_weapons/hammer_C
+  kk_weapons/spear_A kk_weapons/bow_A kk_weapons/arrow_A kk_weapons/dagger_B
 )
 for p in "${props[@]}"; do
   curl -sfL "$ASSETS/props/$p.glb" -o "models/props/$(basename "$p").glb" && echo "ok $(basename "$p")"

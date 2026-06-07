@@ -1,8 +1,9 @@
 class_name RemotePlayer
 extends Node3D
-## A networked peer's hero: interpolated transform, name tag, health bar, and
-## relayed one-shot actions. Snaps to the FIRST received transform so peers don't
-## materialize on your face and glide.
+## A networked peer's hero: interpolated transform, name tag, health bar, the equipped
+## weapon (mirrored from their state), and relayed one-shot actions (including the exact
+## attack clip). Snaps to the FIRST received transform so peers don't materialize on your
+## face and glide.
 
 const MAX_HP := 100.0
 
@@ -10,6 +11,7 @@ var rig: CharacterRig
 var name_label: Label3D
 var bar: HealthBar3D
 var peer_name := "Hero"
+var peer_id := ""
 var hero_path := "res://models/kk_Rogue.glb"
 
 var _target := Vector3.ZERO
@@ -18,6 +20,7 @@ var _target_yaw := 0.0
 var _vis_speed := 0.0
 var _hp := MAX_HP
 var _dead := false
+var _weapon_i := -1
 
 
 func configure(path: String, nm: String) -> void:
@@ -28,12 +31,7 @@ func configure(path: String, nm: String) -> void:
 func _ready() -> void:
 	rig = CharacterRig.new()
 	add_child(rig)
-	var weapon := ""
-	var shield := ""
-	if not hero_path.ends_with("kk_Mage.glb"):
-		weapon = "res://models/props/axe_A.glb"
-		shield = "res://models/props/shield_B.glb"
-	rig.setup(hero_path, Color(0.06, 0.05, 0.08), weapon, shield)
+	rig.setup(hero_path, Color(0.06, 0.05, 0.08))
 
 	name_label = Label3D.new()
 	name_label.text = peer_name
@@ -53,19 +51,30 @@ func _ready() -> void:
 	add_child(bar)
 	bar.setup(Color(0.4, 0.7, 1.0))
 	add_to_group("targets")
+	equip_weapon(0)
+
+
+func equip_weapon(i: int) -> void:
+	if i == _weapon_i:
+		return
+	_weapon_i = i
+	if rig != null:
+		var def := Weapons.get_def(i)
+		rig.attach_weapon(str(def.get("rhand", "")), str(def.get("lhand", "")))
 
 
 func is_targetable() -> bool:
 	return not _dead
 
 
-func apply_state(pos: Vector3, ry: float, hp: float, dead: bool) -> void:
+func apply_state(pos: Vector3, ry: float, hp: float, dead: bool, wp: int) -> void:
 	if not _have_first:
 		_have_first = true
 		global_position = pos
 	_target = pos
 	_target_yaw = ry
 	_hp = hp
+	equip_weapon(wp)
 	if bar != null:
 		bar.set_fraction(hp / MAX_HP)
 	if dead and not _dead:
@@ -76,10 +85,11 @@ func apply_state(pos: Vector3, ry: float, hp: float, dead: bool) -> void:
 		rig.revive()
 
 
-func play_act(a: String) -> void:
+func play_act(a: String, clip: String) -> void:
 	match a:
-		"attack":
-			rig.play_attack(hero_path.ends_with("kk_Mage.glb"))
+		"atk":
+			if clip != "" and rig.has_clip(clip):
+				rig.play_oneshot(clip, true, 1.2)
 		"dodge":
 			rig.play_dodge()
 		"wave":

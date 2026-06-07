@@ -39,6 +39,7 @@ var _swing_announce := false
 
 
 func setup(model_path: String, tint_col: Color, sc: float) -> void:
+	add_to_group("skeletons")
 	collision_layer = 4
 	collision_mask = 1
 	var col := CollisionShape3D.new()
